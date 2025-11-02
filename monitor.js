@@ -49,33 +49,84 @@ class TwitterMonitor {
       console.log(`\n🔍 正在获取用户信息...`);
       console.log(`   监控用户: ${this.usernames.join(', ')}`);
       
-      // 获取所有用户信息
-      for (let i = 0; i < this.usernames.length; i++) {
-        const username = this.usernames[i];
-        console.log(`\n   正在获取 @${username} 的信息...`);
-        
+      // 检查是否有缓存的用户信息
+      const cacheFile = path.join(__dirname, 'user_cache.json');
+      let useCache = false;
+      
+      if (fs.existsSync(cacheFile)) {
         try {
-          const user = await this.twitterApi.getUserByUsername(username);
-          this.users.push({
-            id: user.id,
-            username: user.username,
-            name: user.name
-          });
+          const cache = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+          const cacheAge = Date.now() - cache.timestamp;
           
-          console.log(`   ✓ ${user.name} (@${user.username})`);
-          console.log(`     ID: ${user.id}`);
-          console.log(`     粉丝数: ${user.public_metrics?.followers_count || 'N/A'}`);
+          // 缓存24小时内有效
+          if (cacheAge < 24 * 60 * 60 * 1000) {
+            console.log(`\n   ℹ️  使用缓存的用户信息 (${Math.floor(cacheAge / 3600000)} 小时前)`);
+            this.users = cache.users;
+            useCache = true;
+          }
+        } catch (e) {
+          console.log(`   ⚠️  缓存文件无效，将重新获取`);
+        }
+      }
+      
+      // 如果没有缓存或缓存过期，从 API 获取
+      if (!useCache) {
+        console.log(`\n   ⚠️  首次初始化可能需要 API 配额，如遇速率限制请等待 15 分钟`);
+        
+        for (let i = 0; i < this.usernames.length; i++) {
+          const username = this.usernames[i];
+          console.log(`\n   正在获取 @${username} 的信息...`);
           
-          // 如果不是最后一个用户，添加延迟避免速率限制
-          if (i < this.usernames.length - 1) {
-            await new Promise(resolve => setTimeout(resolve, 2000)); // 等待2秒
+          try {
+            const user = await this.twitterApi.getUserByUsername(username);
+            this.users.push({
+              id: user.id,
+              username: user.username,
+              name: user.name
+            });
+            
+            console.log(`   ✓ ${user.name} (@${user.username})`);
+            console.log(`     ID: ${user.id}`);
+            console.log(`     粉丝数: ${user.public_metrics?.followers_count || 'N/A'}`);
+            
+            // 如果不是最后一个用户，添加延迟避免速率限制
+            if (i < this.usernames.length - 1) {
+              console.log(`   ⏳ 等待 3 秒避免速率限制...`);
+              await new Promise(resolve => setTimeout(resolve, 3000)); // 等待3秒
+            }
+          } catch (error) {
+            if (error.response?.status === 429) {
+              console.error(`\n   ✗ @${username}: API 速率限制已达上限`);
+              console.error(`\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+              console.error(`   ❌ Twitter API 速率限制\n`);
+              console.error(`   解决方案：`);
+              console.error(`   1. 等待 15 分钟后重试`);
+              console.error(`   2. 检查是否有其他程序使用相同的 Token`);
+              console.error(`   3. 使用手动方式添加用户信息（见下方）\n`);
+              console.error(`   手动添加用户信息：`);
+              console.error(`   创建 user_cache.json 文件，格式如下：`);
+              console.error(`   {`);
+              console.error(`     "timestamp": ${Date.now()},`);
+              console.error(`     "users": [`);
+              console.error(`       {"id": "用户ID", "username": "用户名", "name": "显示名称"}`);
+              console.error(`     ]`);
+              console.error(`   }`);
+              console.error(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
+              throw new Error('Twitter API 速率限制，请等待15分钟后重试，或手动创建用户缓存');
+            }
+            throw error;
           }
-        } catch (error) {
-          if (error.response?.status === 429) {
-            console.error(`   ✗ @${username}: API 速率限制，请稍后重试`);
-            throw new Error('Twitter API 速率限制，请等待15分钟后重试');
-          }
-          throw error;
+        }
+        
+        // 保存用户信息到缓存
+        try {
+          fs.writeFileSync(cacheFile, JSON.stringify({
+            timestamp: Date.now(),
+            users: this.users
+          }, null, 2));
+          console.log(`\n   ✓ 用户信息已缓存到 user_cache.json`);
+        } catch (e) {
+          console.warn(`   ⚠️  无法保存用户缓存: ${e.message}`);
         }
       }
       

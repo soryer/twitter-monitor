@@ -308,17 +308,48 @@ pm2 stop twitter-monitor
 
 ## 故障排除
 
-### 1. Twitter API 返回 401 错误
+### 1. Twitter API 速率限制（429 错误）⚠️ 最常见
+
+**问题：** Twitter 免费 API 限制 15 次请求/15分钟，初始化时很容易超限
+
+**解决方案 A：等待并调整配置**
+```bash
+# 1. 等待 15 分钟
+# 2. 修改 .env，增加检查间隔
+CHECK_INTERVAL=600000  # 10分钟
+
+# 3. 减少监控用户（建议不超过3个）
+TWITTER_USERNAME=user1,user2
+```
+
+**解决方案 B：使用用户缓存（强烈推荐）** ⭐
+```bash
+# 运行缓存创建工具
+node create-user-cache.js
+
+# 按提示输入：
+# 1. 访问 https://tweeterid.com/ 获取用户 ID
+# 2. 输入用户 ID、用户名、显示名称
+# 3. 完成后重启程序
+
+pm2 restart twitter-monitor
+```
+
+创建缓存后，程序将使用本地数据，**不再消耗 API 配额**！
+
+### 2. Twitter API 返回 401 错误
 - 检查 Bearer Token 是否正确
 - 确认 Token 没有过期
 
-### 2. Telegram 无法发送消息
+### 3. Telegram 无法发送消息
 - 检查 Bot Token 是否正确
 - 确认 Chat ID 是否正确
 - 确认 Bot 已添加到群组（如果是群组）
 
-### 3. 代理连接失败
+### 4. 代理连接失败
 - 检查代理地址、端口、用户名、密码是否正确
+- 不要使用占位符值（如 `username:password@ip:1337`）
+- 如不需要代理，注释掉 .env 中的代理配置
 - 尝试使用 curl 命令测试代理是否可用
 
 ## 许可证
