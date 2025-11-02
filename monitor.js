@@ -13,6 +13,15 @@ class TwitterMonitor {
     this.users = []; // 存储用户信息 [{id, username, name}]
     this.checkInterval = config.monitor.checkInterval;
     this.isRunning = false;
+    
+    // API 使用统计
+    this.apiStats = {
+      totalCalls: 0,
+      successCalls: 0,
+      failedCalls: 0,
+      rateLimitHits: 0,
+      startTime: Date.now()
+    };
   }
 
   /**
@@ -171,54 +180,108 @@ class TwitterMonitor {
   }
 
   /**
-   * 检查新推文
+   * 显示 API 使用统计
+   */
+  showApiStats() {
+    const runtime = Math.floor((Date.now() - this.apiStats.startTime) / 60000); // 分钟
+    const avgCallsPerHour = runtime > 0 ? Math.floor(this.apiStats.totalCalls / (runtime / 60)) : 0;
+    
+    console.log(`\n📊 API 使用统计:`);
+    console.log(`   运行时长: ${runtime} 分钟`);
+    console.log(`   总调用: ${this.apiStats.totalCalls} 次`);
+    console.log(`   成功: ${this.apiStats.successCalls} | 失败: ${this.apiStats.failedCalls}`);
+    console.log(`   速率限制: ${this.apiStats.rateLimitHits} 次`);
+    console.log(`   平均: ${avgCallsPerHour} 次/小时`);
+    
+    // Twitter API Free Tier 限制提醒
+    if (avgCallsPerHour > 12) {
+      console.log(`   ⚠️  调用频率较高，建议增加检查间隔`);
+    } else {
+      console.log(`   ✅ 调用频率正常`);
+    }
+  }
+
+  /**
+   * 检查新推文（优化版）
    */
   async checkNewTweets() {
     try {
       const lastTweetIds = this.getLastTweetIds();
       const now = new Date().toLocaleTimeString('zh-CN');
       let hasNewTweets = false;
+      let checkStartTime = Date.now();
+      
+      console.log(`\n[${now}] 🔍 开始检查 ${this.users.length} 个用户...`);
       
       // 检查每个用户的新推文
       for (let i = 0; i < this.users.length; i++) {
         const user = this.users[i];
-        const tweets = await this.twitterApi.getUserTweets(user.id, 10);
         
-        if (!tweets.data || tweets.data.length === 0) {
-          // 如果不是最后一个用户，添加延迟
-          if (i < this.users.length - 1) {
-            await new Promise(resolve => setTimeout(resolve, 1000));
+        try {
+          // 记录 API 调用
+          this.apiStats.totalCalls++;
+          
+          // 只获取最新 5 条推文（减少数据传输）
+          const tweets = await this.twitterApi.getUserTweets(user.id, 5);
+          
+          this.apiStats.successCalls++;
+          
+          if (!tweets.data || tweets.data.length === 0) {
+            console.log(`   @${user.username}: 暂无推文`);
+            // 如果不是最后一个用户，添加延迟
+            if (i < this.users.length - 1) {
+              await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+            continue;
           }
-          continue;
-        }
 
-        const lastTweetId = lastTweetIds[user.username];
+          const lastTweetId = lastTweetIds[user.username];
 
-        // 过滤出新推文
-        const newTweets = lastTweetId 
-          ? tweets.data.filter(tweet => tweet.id > lastTweetId)
-          : [];
+          // 过滤出新推文
+          const newTweets = lastTweetId 
+            ? tweets.data.filter(tweet => tweet.id > lastTweetId)
+            : [];
 
-        if (newTweets.length > 0) {
-          hasNewTweets = true;
-          console.log(`\n🆕 @${user.username} 发现 ${newTweets.length} 条新推文！`);
-          
-          // 按时间顺序发送通知（从旧到新）
-          newTweets.reverse();
-          
-          for (const tweet of newTweets) {
-            console.log(`\n📨 推文 ID: ${tweet.id}`);
-            console.log(`   用户: @${user.username}`);
-            console.log(`   内容: ${tweet.text.substring(0, 100)}${tweet.text.length > 100 ? '...' : ''}`);
+          if (newTweets.length > 0) {
+            hasNewTweets = true;
+            console.log(`\n🆕 @${user.username} 发现 ${newTweets.length} 条新推文！`);
             
-            await this.telegram.sendTweetAlert(tweet, user);
+            // 按时间顺序发送通知（从旧到新）
+            newTweets.reverse();
             
-            // 稍微延迟，避免发送太快
-            await new Promise(resolve => setTimeout(resolve, 1000));
+            for (const tweet of newTweets) {
+              console.log(`\n📨 推文 ID: ${tweet.id}`);
+              console.log(`   时间: ${new Date(tweet.created_at).toLocaleString('zh-CN')}`);
+              console.log(`   内容: ${tweet.text.substring(0, 100)}${tweet.text.length > 100 ? '...' : ''}`);
+              
+              await this.telegram.sendTweetAlert(tweet, user);
+              
+              // 稍微延迟，避免发送太快
+              await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+            
+            // 更新该用户的最新推文 ID
+            lastTweetIds[user.username] = tweets.data[0].id;
+          } else {
+            console.log(`   @${user.username}: 无新推文 (最新: ${tweets.data[0].id.substring(0, 8)}...)`);
           }
           
-          // 更新该用户的最新推文 ID
-          lastTweetIds[user.username] = tweets.data[0].id;
+        } catch (error) {
+          this.apiStats.failedCalls++;
+          
+          if (error.response?.status === 429) {
+            this.apiStats.rateLimitHits++;
+            console.error(`   ✗ @${user.username}: API 速率限制，跳过本次检查`);
+            
+            // 显示重置时间
+            const resetTime = error.response.headers['x-rate-limit-reset'];
+            if (resetTime) {
+              const resetDate = new Date(resetTime * 1000);
+              console.error(`   速率限制将在 ${resetDate.toLocaleTimeString('zh-CN')} 重置`);
+            }
+          } else {
+            console.error(`   ✗ @${user.username}: ${error.message}`);
+          }
         }
         
         // 如果不是最后一个用户，添加延迟避免速率限制
@@ -230,9 +293,19 @@ class TwitterMonitor {
       // 保存所有用户的推文 ID
       this.saveLastTweetIds(lastTweetIds);
       
+      const checkDuration = ((Date.now() - checkStartTime) / 1000).toFixed(1);
+      
       if (!hasNewTweets) {
-        console.log(`[${now}] ✓ 已检查所有用户，暂无新推文`);
+        console.log(`\n✓ 检查完成 (耗时 ${checkDuration}s)，暂无新推文`);
+      } else {
+        console.log(`\n✅ 检查完成 (耗时 ${checkDuration}s)，已发送通知`);
       }
+      
+      // 每小时显示一次统计
+      if (this.apiStats.totalCalls % 20 === 0) {
+        this.showApiStats();
+      }
+      
     } catch (error) {
       console.error('检查推文时出错:', error.message);
     }
@@ -255,7 +328,21 @@ class TwitterMonitor {
       this.users.forEach(user => {
         console.log(`   • @${user.username} (${user.name})`);
       });
-      console.log(`\n⏱️  检查间隔: ${this.checkInterval / 1000} 秒`);
+      console.log(`\n⏱️  检查间隔: ${this.checkInterval / 1000} 秒 (${this.checkInterval / 60000} 分钟)`);
+      
+      // 计算每小时 API 调用次数并给出建议
+      const callsPerHour = Math.ceil(3600000 / this.checkInterval) * this.users.length;
+      console.log(`\n📈 预计 API 使用:`);
+      console.log(`   每小时: ~${callsPerHour} 次调用`);
+      console.log(`   每天: ~${callsPerHour * 24} 次调用`);
+      
+      if (callsPerHour > 15) {
+        console.log(`\n⚠️  注意: 调用频率较高，可能触发速率限制`);
+        console.log(`   建议: 增加 CHECK_INTERVAL 或减少监控用户数`);
+      } else if (callsPerHour <= 12) {
+        console.log(`\n✅ API 使用频率合理，可以稳定运行`);
+      }
+      
       console.log(`\n按 Ctrl+C 停止监控\n`);
       
       // 立即检查一次
@@ -281,6 +368,9 @@ class TwitterMonitor {
       clearInterval(this.intervalId);
       this.isRunning = false;
       console.log('\n\n🛑 监控已停止');
+      
+      // 显示最终统计
+      this.showApiStats();
     }
   }
 }
