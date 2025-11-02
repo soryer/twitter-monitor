@@ -50,18 +50,33 @@ class TwitterMonitor {
       console.log(`   监控用户: ${this.usernames.join(', ')}`);
       
       // 获取所有用户信息
-      for (const username of this.usernames) {
+      for (let i = 0; i < this.usernames.length; i++) {
+        const username = this.usernames[i];
         console.log(`\n   正在获取 @${username} 的信息...`);
-        const user = await this.twitterApi.getUserByUsername(username);
-        this.users.push({
-          id: user.id,
-          username: user.username,
-          name: user.name
-        });
         
-        console.log(`   ✓ ${user.name} (@${user.username})`);
-        console.log(`     ID: ${user.id}`);
-        console.log(`     粉丝数: ${user.public_metrics?.followers_count || 'N/A'}`);
+        try {
+          const user = await this.twitterApi.getUserByUsername(username);
+          this.users.push({
+            id: user.id,
+            username: user.username,
+            name: user.name
+          });
+          
+          console.log(`   ✓ ${user.name} (@${user.username})`);
+          console.log(`     ID: ${user.id}`);
+          console.log(`     粉丝数: ${user.public_metrics?.followers_count || 'N/A'}`);
+          
+          // 如果不是最后一个用户，添加延迟避免速率限制
+          if (i < this.usernames.length - 1) {
+            await new Promise(resolve => setTimeout(resolve, 2000)); // 等待2秒
+          }
+        } catch (error) {
+          if (error.response?.status === 429) {
+            console.error(`   ✗ @${username}: API 速率限制，请稍后重试`);
+            throw new Error('Twitter API 速率限制，请等待15分钟后重试');
+          }
+          throw error;
+        }
       }
       
       console.log(`\n✅ 所有用户信息获取成功！共 ${this.users.length} 个用户`);
@@ -74,7 +89,8 @@ class TwitterMonitor {
       const lastTweetIds = this.getLastTweetIds();
       
       // 为每个用户获取最新推文作为起点
-      for (const user of this.users) {
+      for (let i = 0; i < this.users.length; i++) {
+        const user = this.users[i];
         const tweets = await this.twitterApi.getUserTweets(user.id, 1);
         if (tweets.data && tweets.data.length > 0) {
           const latestTweetId = tweets.data[0].id;
@@ -85,6 +101,11 @@ class TwitterMonitor {
           } else {
             console.log(`\n📌 @${user.username} 上次检查的推文 ID: ${lastTweetIds[user.username]}`);
           }
+        }
+        
+        // 如果不是最后一个用户，添加延迟
+        if (i < this.users.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 2000)); // 等待2秒
         }
       }
       
@@ -108,10 +129,15 @@ class TwitterMonitor {
       let hasNewTweets = false;
       
       // 检查每个用户的新推文
-      for (const user of this.users) {
+      for (let i = 0; i < this.users.length; i++) {
+        const user = this.users[i];
         const tweets = await this.twitterApi.getUserTweets(user.id, 10);
         
         if (!tweets.data || tweets.data.length === 0) {
+          // 如果不是最后一个用户，添加延迟
+          if (i < this.users.length - 1) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
           continue;
         }
 
@@ -142,6 +168,11 @@ class TwitterMonitor {
           
           // 更新该用户的最新推文 ID
           lastTweetIds[user.username] = tweets.data[0].id;
+        }
+        
+        // 如果不是最后一个用户，添加延迟避免速率限制
+        if (i < this.users.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
         }
       }
       

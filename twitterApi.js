@@ -46,6 +46,13 @@ class TwitterAPI {
       });
       return response.data.data;
     } catch (error) {
+      if (error.response?.status === 429) {
+        const resetTime = error.response.headers['x-rate-limit-reset'];
+        const waitSeconds = resetTime ? Math.ceil(resetTime - Date.now() / 1000) : 900;
+        console.error('\n❌ Twitter API 速率限制已达上限 (429 Too Many Requests)');
+        console.error(`   请等待 ${Math.ceil(waitSeconds / 60)} 分钟后重试`);
+        console.error('   或检查是否有其他程序在使用相同的 API Token\n');
+      }
       console.error('获取用户信息失败:', error.response?.data || error.message);
       throw error;
     }
@@ -66,6 +73,15 @@ class TwitterAPI {
       });
       return response.data;
     } catch (error) {
+      if (error.response?.status === 429) {
+        const resetTime = error.response.headers['x-rate-limit-reset'];
+        const waitSeconds = resetTime ? Math.ceil(resetTime - Date.now() / 1000) : 900;
+        console.warn(`\n⚠️  API 速率限制，${Math.ceil(waitSeconds / 60)} 分钟后恢复`);
+      }
+      // 速率限制时不抛出错误，避免程序崩溃
+      if (error.response?.status === 429) {
+        return { data: [] }; // 返回空数据
+      }
       console.error('获取推文失败:', error.response?.data || error.message);
       throw error;
     }
