@@ -1,0 +1,7 @@
+node_modules/
+.env
+*.log
+.DS_Store
+data/
+last_tweet_id.txt
+last_tweet_id.json
